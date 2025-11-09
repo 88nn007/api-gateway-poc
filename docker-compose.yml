@@ -39,6 +39,46 @@ services:
     networks:
       - app_net
 
+  # --- Kafka Connect Service ---
+  connect:
+    build:
+      context: .
+      dockerfile: connect.Dockerfile
+    platform: linux/amd64
+    container_name: kafka_connect
+    depends_on:
+      kafka:
+        condition: service_started
+      postgresql:
+        condition: service_healthy
+    ports:
+      - "8083:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: "kafka:29092"
+      CONNECT_REST_ADVERTISED_HOST_NAME: "connect"
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: "kafka-connect-group"
+      CONNECT_CONFIG_STORAGE_TOPIC: "_connect-configs"
+      CONNECT_OFFSET_STORAGE_TOPIC: "_connect-offsets"
+      CONNECT_STATUS_STORAGE_TOPIC: "_connect-status"
+
+      # --- FIX: Set Replication Factor to 1 for our single-broker cluster ---
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: "1"
+
+      CONNECT_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_INTERNAL_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_INTERNAL_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_PLUGIN_PATH: "/usr/share/java,/usr/share/confluent-hub-components"
+    networks:
+      - app_net
+
   # --- Our MinIO Stack ---
   minio:
     image: quay.io/minio/minio:latest
@@ -96,7 +136,7 @@ services:
     networks:
       - app_net
 
-  # --- Official OpenMetadata Stack (with corrected tags) ---
+  # --- Official OpenMetadata Stack ---
   postgresql:
     container_name: openmetadata_postgresql
     image: docker.getcollate.io/openmetadata/postgresql:1.10.4
@@ -115,7 +155,6 @@ services:
     networks:
       - app_net
     healthcheck:
-      # --- FIX: Check against the default 'postgres' db ---
       test: psql -U postgres -tAc 'select 1' -d postgres
       interval: 15s
       timeout: 10s
@@ -377,14 +416,14 @@ services:
       AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-admin}
       AIRFLOW_TIMEOUT: ${AIRFLOW_TIMEOUT:-10}
       AIRFLOW_TRUST_STORE_PATH: ${AIRFLOW_TRUST_STORE_PATH:-""}
-      AIRFLOW_TRUST_STORE_PASSWORD: ${AIRFLOW_TRUST_STORE_PASSWORD:-""}
+      AIRFLOW_TRUST_STORE_PASSWORD: ${AIRKA_TRUST_STORE_PASSWORD:-""}
       FERNET_KEY: ${FERNET_KEY:-jJ/9sz0g0OHxsfxOoSfdFdmk3ysNmPRnH3TUAbz3IHA=}
       SECRET_MANAGER: ${SECRET_MANAGER:-db}
       OM_SM_REGION: ${OM_SM_REGION:-""}
       OM_SM_ACCESS_KEY_ID: ${OM_SM_ACCESS_KEY_ID:-""}
       OM_SM_ACCESS_KEY: ${OM_SM_ACCESS_KEY:-""}
       OM_EMAIL_ENTITY: ${OM_EMAIL_ENTITY:-"OpenMetadata"}
-      OM_SUPPORT_URL: ${OM_SUPPORT_URL:-"https://slack.open-metadata.org"}
+      OM_SUPPORT_URL: ${OM_SUPPORT_URL:-"httpsS://slack.open-metadata.org"}
       AUTHORIZER_ENABLE_SMTP: ${AUTHORIZER_ENABLE_SMTP:-false}
       OPENMETADATA_SERVER_URL: ${OPENMETADATA_SERVER_URL:-""}
       OPENMETADATA_SMTP_SENDER_MAIL: ${OPENMETADATA_SMTP_SENDER_MAIL:-""}
