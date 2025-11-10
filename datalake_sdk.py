@@ -4,16 +4,46 @@ from kafka import KafkaProducer
 from kafka.errors import NoBrokersAvailable
 from minio import Minio
 from minio.error import S3Error
-from time import sleep
+import time
+
+
+# --- NEW: Helper function to build a JSON schema ---
+def build_json_schema(data: dict):
+    """
+    Infers a simple JSON schema from a data dictionary.
+    This is the format required by Kafka Connect's JsonConverter
+    when 'schemas.enable=true'.
+    """
+    field_map = {
+        str: "string",
+        int: "int64",  # Use int64 for Postgres BIGINT
+        float: "float64",
+        bool: "boolean",
+    }
+
+    fields = []
+    for key, value in data.items():
+        # Default to string if type is unknown (e.g., NoneType)
+        field_type = field_map.get(type(value), "string")
+        fields.append(
+            {
+                "type": field_type,
+                "optional": True,  # All fields are optional
+                "field": key,
+            }
+        )
+
+    return {
+        "type": "struct",
+        "fields": fields,
+        "optional": False,
+        "name": "UserLogin",  # Can be any arbitrary name
+    }
 
 
 class DataLakeClient:
     """
     A simple SDK to interact with our Data Lake POC stack.
-
-    This client handles connections to:
-    - Kafka (for JSON event streaming)
-    - MinIO (for unstructured file storage)
     """
 
     def __init__(
@@ -23,9 +53,6 @@ class DataLakeClient:
         minio_access_key="minioadmin",
         minio_secret_key="minioadminpassword",
     ):
-        """
-        Initializes the clients for Kafka and MinIO.
-        """
         print("Initializing DataLakeClient...")
 
         # --- Kafka Setup ---
@@ -33,17 +60,14 @@ class DataLakeClient:
         try:
             self.kafka_producer = KafkaProducer(
                 bootstrap_servers=kafka_server,
-                # --- FIX: Add a serializer for the message key (which will be a string) ---
+                # Key is just a string
                 key_serializer=lambda k: k.encode("utf-8"),
-                # Serialize Python dicts to JSON and encode as UTF-8
+                # Value is a full JSON object (schema + payload)
                 value_serializer=lambda v: json.dumps(v).encode("utf-8"),
             )
             print("✅ Kafka Producer connection successful.")
-        except NoBrokersAvailable:
-            print(f"❌ ERROR: Cannot connect to Kafka at {kafka_server}.")
-            print("   Please ensure the Kafka container is running.")
         except Exception as e:
-            print(f"❌ An unexpected error occurred with Kafka: {e}")
+            print(f"❌ ERROR connecting to Kafka: {e}")
 
         # --- MinIO Setup ---
         self.minio_client = None
@@ -52,60 +76,51 @@ class DataLakeClient:
                 minio_endpoint,
                 access_key=minio_access_key,
                 secret_key=minio_secret_key,
-                secure=False,  # Set to False because we are using http
+                secure=False,
             )
             self.minio_client.list_buckets()
             print("✅ MinIO Client connection successful.")
         except Exception as e:
-            print(f"❌ ERROR: Cannot connect to MinIO at {minio_endpoint}.")
-            print(f"   Details: {e}")
+            print(f"❌ ERROR connecting to MinIO: {e}")
 
-    # --- FIX: Update function to accept a 'key' argument ---
     def send_to_kafka(self, topic: str, key: str, data: dict):
         """
-        Sends a single JSON message (as a Python dict) to a Kafka topic.
+        Sends a schema-wrapped JSON message to a Kafka topic.
 
-        :param topic: The name of the Kafka topic (e.g., 'user_activity')
-        :param key: The message key (will be used as the Primary Key).
-        :param data: The Python dictionary to send as JSON.
+        :param topic: The name of the Kafka topic
+        :param key: The message key
+        :param data: The Python dictionary (this is the payload).
         """
         if not self.kafka_producer:
-            print("❌ Kafka producer is not initialized. Cannot send message.")
+            print("❌ Kafka producer is not initialized.")
             return
 
+        # --- FIX: Build the schema-wrapped message ---
+        schema = build_json_schema(data)
+        schema_wrapped_message = {"schema": schema, "payload": data}
+
         try:
-            print(f"Sending message to Kafka topic '{topic}' (Key: {key})...")
-            # --- FIX: Send both the key and the value ---
-            self.kafka_producer.send(topic, key=key, value=data)
-            self.kafka_producer.flush()  # Ensure message is sent
+            print(f"Sending schema-wrapped message to '{topic}' (Key: {key})...")
+            # Send both the key and the new wrapped value
+            self.kafka_producer.send(topic, key=key, value=schema_wrapped_message)
+            self.kafka_producer.flush()
             print("  -> Message sent successfully.")
 
         except Exception as e:
             print(f"❌ Failed to send message to Kafka: {e}")
 
     def upload_to_minio(self, bucket_name: str, object_name: str, file_path: str):
-        """
-        Uploads a local file to a MinIO bucket.
-        """
         if not self.minio_client:
             print("❌ MinIO client is not initialized. Cannot upload file.")
             return
-
         if not os.path.exists(file_path):
             print(f"❌ Local file not found at: {file_path}")
             return
-
         try:
             print(
                 f"Uploading '{file_path}' to MinIO bucket '{bucket_name}' as '{object_name}'..."
             )
             self.minio_client.fput_object(bucket_name, object_name, file_path)
             print("  -> File uploaded successfully.")
-            print(
-                f"  -> View it on the MinIO console: http://localhost:9001/buckets/{bucket_name}/{object_name}"
-            )
-
         except S3Error as e:
             print(f"❌ Failed to upload file to MinIO: {e}")
-        except Exception as e:
-            print(f"❌ An unexpected error occurred during upload: {e}")

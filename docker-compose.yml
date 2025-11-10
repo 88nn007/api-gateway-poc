@@ -10,6 +10,23 @@ volumes:
 
 services:
   # --- Our Kafka Stack ---
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka_ui
+    platform: linux/amd64 # Good practice for your ARM machine
+    depends_on:
+      - kafka
+      - zookeeper
+    ports:
+      - "8090:8080" # Mapped to 8090 to avoid port 8080 conflict
+    environment:
+      KAFKA_CLUSTERS_0_NAME: "Data Lake POC Cluster"
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "kafka:29092"
+      KAFKA_CLUSTERS_0_ZOOKEEPER: "zookeeper:2181"
+      KAFKA_CLUSTERS_0_READONLY: "false"
+    networks:
+      - app_net
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
     container_name: zookeeper
@@ -104,10 +121,15 @@ services:
       - minio
     entrypoint: >
       /bin/sh -c "
-      /usr/bin/mc config host add minio http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD;
-      /usr/bin/mc rb --force minio/datalake-poc;
-      /usr/bin/mc mb minio/datalake-poc;
-      /usr/bin/mc policy set download minio/datalake-poc;
+      echo 'Waiting for MinIO...';
+      until /usr/bin/mc alias set myminio http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD; do
+        sleep 1;
+      done;
+      echo 'MinIO is up. Configuring buckets...';
+      /usr/bin/mc rb --force myminio/datalake-poc;
+      /usr/bin/mc mb myminio/datalake-poc;
+      /usr/bin/mc anonymous set download myminio/datalake-poc;
+      echo 'MinIO configuration complete.';
       exit 0;
       "
     environment:
